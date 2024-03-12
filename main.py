@@ -4,6 +4,7 @@ import json
 from typing import Dict, List
 from json import JSONEncoder
 import jsonpickle
+import numpy as np
 
 Time = int
 Symbol = str
@@ -174,14 +175,14 @@ class Trader:
                     # with the same quantity
                     # We expect this order to trade with the sell order
                     print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -1))
+                    orders.append(Order(product, best_ask, -2))
     
             if len(order_depth.buy_orders) != 0:
                 best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
                 if float(best_bid)/acceptable_price - 1 > 0.0005:
 										# Similar situation with sell orders
                     print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -1))
+                    orders.append(Order(product, best_bid, -2))
             
             result[product] = orders
     
