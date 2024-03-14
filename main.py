@@ -1,195 +1,191 @@
-from typing import List
-
-import json
-from typing import Dict, List
-from json import JSONEncoder
-import jsonpickle
+#%%
+import pandas as pd
 import numpy as np
+n_imb = 4
+n_spread = 4
+dt = 1
 
-Time = int
-Symbol = str
-Product = str
-Position = int
-UserId = str
-ObservationValue = int
+df = pd.read_csv("price_history.csv")
 
+df = df[df['product'] == "STARFRUIT"]
 
-class Listing:
+df = df.head(500)
 
-    def __init__(self, symbol: Symbol, product: Product, denomination: Product):
-        self.symbol = symbol
-        self.product = product
-        self.denomination = denomination
-        
-                 
-class ConversionObservation:
+df.columns = ["day", "product", "time", "bid", "bs", "ask", "as"]
+def prep_data_sym(T, n_imb, dt, n_spread):
+        spread = T['ask'] - T['bid']
+        print(spread_bucket)
+        ticksize = np.round(min(spread.loc[spread > 0]) * 100) / 100
+        T.spread = T['ask'] - T['bid']
+        # adds the spread and mid prices
+        T["spread"] = np.round((T["ask"] - T["bid"]) / ticksize) * ticksize
+        T["mid"] = (T["bid"] + T["ask"]) / 2
+        # filter out spreads >= n_spread
+        T = T.loc[(T.spread <= n_spread * ticksize) & (T.spread > 0)]
+        T["imb"] = T["bs"] / (T["bs"] + T["as"])
+        # discretize imbalance into percentiles
+        T["imb_bucket"] = pd.qcut(T["imb"], n_imb, labels=False)
+        T["next_mid"] = T["mid"].shift(-dt)
+        # step ahead state variables
+        T["next_spread"] = T["spread"].shift(-dt)
+        T["next_time"] = T["time"].shift(-dt)
+        T["next_imb_bucket"] = T["imb_bucket"].shift(-dt)
+        # step ahead change in price
+        T["dM"] = np.round((T["next_mid"] - T["mid"]) / ticksize * 2) * ticksize / 2
+        T = T.loc[(T['dM'] <= ticksize * 1.1) & (T['dM'] >= -ticksize * 1.1)]
+        # symetrize data
+        T2 = T.copy(deep=True)
+        T2["imb_bucket"] = n_imb - 1 - T2["imb_bucket"]
+        T2["next_imb_bucket"] = n_imb - 1 - T2["next_imb_bucket"]
+        T2["dM"] = -T2["dM"]
+        T2["mid"] = -T2["mid"]
+        T3 = pd.concat([T, T2])
+        T3.index = pd.RangeIndex(len(T3.index))
+        return T3, ticksize
 
-    def __init__(self, bidPrice: float, askPrice: float, transportFees: float, exportTariff: float, importTariff: float, sunlight: float, humidity: float):
-        self.bidPrice = bidPrice
-        self.askPrice = askPrice
-        self.transportFees = transportFees
-        self.exportTariff = exportTariff
-        self.importTariff = importTariff
-        self.sunlight = sunlight
-        self.humidity = humidity
-        
+def plot_Gstar(G1,B):
+    G2=np.dot(B,G1)+G1
+    G3=G2+np.dot(np.dot(B,B),G1)
+    G4=G3+np.dot(np.dot(np.dot(B,B),B),G1)
+    G5=G4+np.dot(np.dot(np.dot(np.dot(B,B),B),B),G1)
+    G6=G5+np.dot(np.dot(np.dot(np.dot(np.dot(B,B),B),B),B),G1)
+    return G6
 
-class Observation:
+def block_diag(*arrs):
+    if arrs == ():
+        arrs = ([],)
+    arrs = [np.atleast_2d(a) for a in arrs]
 
-    def __init__(self, plainValueObservations: Dict[Product, ObservationValue], conversionObservations: Dict[Product, ConversionObservation]) -> None:
-        self.plainValueObservations = plainValueObservations
-        self.conversionObservations = conversionObservations
-        
-    def __str__(self) -> str:
-        return "(plainValueObservations: " + jsonpickle.encode(self.plainValueObservations) + ", conversionObservations: " + jsonpickle.encode(self.conversionObservations) + ")"
-     
+    bad_args = [k for k in range(len(arrs)) if arrs[k].ndim > 2]
+    if bad_args:
+        raise ValueError("arguments in the following positions have dimension "
+                         "greater than 2: %s" % bad_args)
 
-class Order:
+    shapes = np.array([a.shape for a in arrs])
+    out_dtype = np.result_type(*[arr.dtype for arr in arrs])
+    out = np.zeros(np.sum(shapes, axis=0), dtype=out_dtype)
 
-    def __init__(self, symbol: Symbol, price: int, quantity: int) -> None:
-        self.symbol = symbol
-        self.price = price
-        self.quantity = quantity
+    r, c = 0, 0
+    for i, (rr, cc) in enumerate(shapes):
+        out[r:r + rr, c:c + cc] = arrs[i]
+        r += rr
+        c += cc
+    return out
 
-    def __str__(self) -> str:
-        return "(" + self.symbol + ", " + str(self.price) + ", " + str(self.quantity) + ")"
+def estimate(T):
+    no_move=T[T['dM']==0]
+    no_move_counts=no_move.pivot_table(index=[ 'next_imb_bucket'], 
+                     columns=['spread', 'imb_bucket'], 
+                     values='time',
+                     fill_value=0, 
+                     aggfunc='count').unstack()
+    Q_counts=np.resize(np.array(no_move_counts[0:(n_imb*n_imb)]),(n_imb,n_imb))
+    # loop over all spreads and add block matrices
+    for i in range(1,n_spread):
+        Qi=np.resize(np.array(no_move_counts[(i*n_imb*n_imb):(i+1)*(n_imb*n_imb)]),(n_imb,n_imb))
+        Q_counts=block_diag(Q_counts,Qi)
+    #print Q_counts
+    move_counts=T[(T['dM']!=0)].pivot_table(index=['dM'], 
+                         columns=['spread', 'imb_bucket'], 
+                         values='time',
+                         fill_value=0, 
+                         aggfunc='count').unstack()
 
-    def __repr__(self) -> str:
-        return "(" + self.symbol + ", " + str(self.price) + ", " + str(self.quantity) + ")"
+    R_counts=np.resize(np.array(move_counts),(n_imb*n_spread,4))
+    T1=np.concatenate((Q_counts,R_counts),axis=1).astype(float)
+    for i in range(0,n_imb*n_spread):
+        T1[i]=T1[i]/T1[i].sum()
+    Q=T1[:,0:(n_imb*n_spread)]
+    R1=T1[:,(n_imb*n_spread):]
+
+    K=np.array([-0.01, -0.005, 0.005, 0.01])
+    move_counts=T[(T['dM']!=0)].pivot_table(index=['spread','imb_bucket'], 
+                     columns=['next_spread', 'next_imb_bucket'], 
+                     values='time',
+                     fill_value=0, 
+                     aggfunc='count') #.unstack()
+
+    R2_counts=np.resize(np.array(move_counts),(n_imb*n_spread,n_imb*n_spread))
+    T2=np.concatenate((Q_counts,R2_counts),axis=1).astype(float)
+
+    for i in range(0,n_imb*n_spread):
+        T2[i]=T2[i]/T2[i].sum()
+    R2=T2[:,(n_imb*n_spread):]
+    Q2=T2[:,0:(n_imb*n_spread)]
+    G1=np.dot(np.dot(np.linalg.inv(np.eye(n_imb*n_spread)-Q),R1),K)
+    B=np.dot(np.linalg.inv(np.eye(n_imb*n_spread)-Q),R2)
     
+    return G1,B,Q,Q2,R1,R2,K
 
-class OrderDepth:
+def calculate_convictions_microprice():
+    print("\n USING CALCULATE CONVICTIONS V2 \n")
+    # second go at calculating fair value given the orderbook,
+    # let's try to implement Stolky's Microprice?
+    imb = np.linspace(0, 1, n_imb)
+    data = df[df["product"] == "STARFRUIT"]
+    ticker = "STARFRUIT"
+    T,ticksize=prep_data_sym(data,n_imb,dt,n_spread)
+    G1,B,Q,Q2,R1,R2,K=estimate(T)
+    G6=plot_Gstar(G1,B)
+    index = [str(i + 1) for i in range(0, n_spread)]
+    G_star = pd.DataFrame(G6.reshape(n_spread, n_imb), index=index, columns=imb)
 
-    def __init__(self):
-        self.buy_orders: Dict[int, int] = {}
-        self.sell_orders: Dict[int, int] = {}
-
-
-class Trade:
-
-    def __init__(self, symbol: Symbol, price: int, quantity: int, buyer: UserId=None, seller: UserId=None, timestamp: int=0) -> None:
-        self.symbol = symbol
-        self.price: int = price
-        self.quantity: int = quantity
-        self.buyer = buyer
-        self.seller = seller
-        self.timestamp = timestamp
-
-    def __str__(self) -> str:
-        return "(" + self.symbol + ", " + self.buyer + " << " + self.seller + ", " + str(self.price) + ", " + str(self.quantity) + ", " + str(self.timestamp) + ")"
-
-    def __repr__(self) -> str:
-        return "(" + self.symbol + ", " + self.buyer + " << " + self.seller + ", " + str(self.price) + ", " + str(self.quantity) + ", " + str(self.timestamp) + ")"
+    return G_star, T, ticksize
 
 
-class TradingState(object):
+df["date"] = -2
+df['date']=df['date'].astype(float)
+df['time']=df['time'].astype(float)
+df['bid']=df['bid'].astype(float)
+df['ask']=df['ask'].astype(float)
+df['bs']=df['bs'].astype(float)
+df['as']=df['as'].astype(float)
+df['mid']=(df['bid'].astype(float)+df['ask'].astype(float))/2
+df['imb']=df['bs'].astype(float)/(df['bs'].astype(float)+df['as'].astype(float))
+df['wmid']=df['ask'].astype(float)*df['imb']+df['bid'].astype(float)*(1-df['imb'])
+# %%
+G_star, T, ticksize = calculate_convictions_microprice()
 
-    def __init__(self,
-                 traderData: str,
-                 timestamp: Time,
-                 listings: Dict[Symbol, Listing],
-                 order_depths: Dict[Symbol, OrderDepth],
-                 own_trades: Dict[Symbol, List[Trade]],
-                 market_trades: Dict[Symbol, List[Trade]],
-                 position: Dict[Product, Position],
-                 observations: Observation):
-        self.traderData = traderData
-        self.timestamp = timestamp
-        self.listings = listings
-        self.order_depths = order_depths
-        self.own_trades = own_trades
-        self.market_trades = market_trades
-        self.position = position
-        self.observations = observations
-        
-    def toJSON(self):
-        return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True)
+# %%
+G_star
 
+# %%
+T
+# %%
+
+bid, ask = 4994, 4996.0
+mid = (bid + ask) / 2
+last_row = df.iloc[-1]
+imb = last_row['bs'].astype(float) / (last_row['bs'].astype(float) + last_row['as'].astype(float))
+imb_bucket = [abs(x - imb) for x in G_star.columns].index(min([abs(x - imb) for x in G_star.columns]))
+spreads = G_star[G_star.columns[imb_bucket]].values
+spread = last_row['ask'].astype(float) - last_row['bid'].astype(float)
+spread_bucket = round(spread / ticksize) * ticksize // ticksize - 1
+if spread_bucket >= n_spread:
+    spread_bucket = n_spread - 1
+    spread_bucket = int(spread_bucket)
+    # Compute adjusted midprice
+    adj_midprice = mid + spreads[spread_bucket]
     
-class ProsperityEncoder(JSONEncoder):
-
-        def default(self, o):
-            return o.__dict__
-
-# Just collapse all the above in whatever IDE you're in. 
-
-LIMITS = {
-    "AMETHYSTS": 20,
-    "STARFRUIT": 20
-}
-
-class Trader:
-
-    def calculate_convictions(self, orderbook):
-        # first go at calculating fair value given the orderbook
-        try:
-            best_bid, best_bid_amount = list(orderbook.buy_orders.items())[0]
-            best_ask, best_ask_amount = list(orderbook.sell_orders.items())[0]
-            fair_value = (best_bid * best_ask_amount + best_ask * best_bid_amount) / (best_bid_amount + best_ask_amount)
-            return fair_value
-        except ZeroDivisionError:
-            return "No Fair Value"
-
-
-
-        # return an int (the fair price)
+# %%
+adj_midprice
+# %%
+bid, ask = 4986.0, 4988.0
+mid = (bid + ask) / 2
+last_row = df.iloc[-1]
+imb = last_row['bs'].astype(float) / (last_row['bs'].astype(float) + last_row['as'].astype(float))
+imb_bucket = [abs(x - imb) for x in G_star.columns].index(min([abs(x - imb) for x in G_star.columns]))
+spreads = G_star[G_star.columns[imb_bucket]].values
+spread = last_row['ask'].astype(float) - last_row['bid'].astype(float)
+spread_bucket = round(spread / ticksize) * ticksize // ticksize - 1
+if spread_bucket >= n_spread:
+    spread_bucket = n_spread - 1
+    spread_bucket = int(spread_bucket)
+    # Compute adjusted midprice
+    adj_midprice = mid + spreads[spread_bucket]
     
-    def run(self, state: TradingState):
-        """
-        Only method required. It takes all buy and sell orders for all symbols as an input,
-        and outputs a list of orders to be sent
-        """
-        print("traderData: " + state.traderData)
-        print("Observations: " + str(state.observations))
-        print("Own trades: " + str(state.own_trades))
-        print("positions: " + str(state.position))
-
-		# Orders to be placed on exchange matching engine
-        result = {}
-        for product in state.order_depths:
-            print("PRODUCT", product)
-            if str(product) == "AMETHYSTS":
-                # amethysts are stable, we won't make a market on them 
-                # rather we will look to hedge our positions
-                continue
-            order_depth: OrderDepth = state.order_depths[product]
-            # Initialize the list of Orders to be sent as an empty list
-            orders: List[Order] = []
-            # Define a fair value for the PRODUCT. Might be different for each tradable item
-            # Note that this value of 10 is just a dummy value, you should likely change it!
-            acceptable_price = self.calculate_convictions(order_depth)
-            if acceptable_price == "No Fair Value":
-                continue
-			# All print statements output will be delivered inside test results
-            print("Acceptable price : " + str(acceptable_price))
-            print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(len(order_depth.sell_orders)))
-    
-            # Order depth list come already sorted. 
-            # We can simply pick first item to check first item to get best bid or offer
-            if len(order_depth.sell_orders) != 0:
-                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-                if float(best_ask)/acceptable_price - 1 < -0.0005:
-                    # In case the lowest ask is lower than our fair value,
-                    # This presents an opportunity for us to buy cheaply
-                    # The code below therefore sends a BUY order at the price level of the ask,
-                    # with the same quantity
-                    # We expect this order to trade with the sell order
-                    print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -2))
-    
-            if len(order_depth.buy_orders) != 0:
-                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-                if float(best_bid)/acceptable_price - 1 > 0.0005:
-										# Similar situation with sell orders
-                    print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -2))
-            
-            result[product] = orders
-    
-		    # String value holding Trader state data required. 
-            # It will be delivered as TradingState.traderData on next execution.
-        traderData = "SAMPLE" 
-        
-        # Sample conversion request. Check more details below. 
-        conversions = 1
-        return result, conversions, traderData
+# %%
+adj_midprice
+# %%
+spreads
+# %%
