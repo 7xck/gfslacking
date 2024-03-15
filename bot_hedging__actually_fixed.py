@@ -249,7 +249,6 @@ class Trader:
             if str(product) == "AMETHYSTS":
                 # amethysts are stable, we won't make a market on them
                 # rather we will look to hedge our positions
-                # implement this logic later ...
                 # 1. let's get our exposure to STARFRUIT
                 if state.position == {}:  # if we have no position
                     continue
@@ -259,8 +258,24 @@ class Trader:
                 amethysts_position = state.position.get("AMETHYSTS", 0)
                 
                 # Calculate the hedge for STARFRUIT
-                beta = 0.1207
+                beta = 0.1207 # ... i calced this from linear regression using the data in large_price_history, usually you would calc it from a rolling window
+                # for the first round we will hope the products behave the same way
+                # in the next round we will take the new data we're given for these products and then start
+                # calculating beta on the fly so there's no future leak
+                # and the hedge is more responsive.
+                # Rationale for hedges: Looking at the data AMETHYSTS are a very stable product, they do not really move much
+                # but it's likely that the price of amethysts are related to starfruit in some way, so we will hedge our position in starfruit
+                # if the price of starfruits changes for some reason, we will be protected by our amethysts position which may follow the same trend
+                # in practice: say starfruits go up because there is a shortage, we will lose money on our short position in starfruits
+                # but because we can see from the data that amethysts generally move the same way as starfruits in the short term, we will make money on our long position in amethysts
+                # thereby reducing the loss we take on our short position in starfruits.
                 desired_hedge_position = round(beta * starfruit_position)
+                if starfruit_position > 0: 
+                    # we are long starfruits so we want to short amethysts
+                    desired_hedge_position = -desired_hedge_position
+                if starfruit_position < 0:
+                    # we are short starfruits so we want to long amethysts
+                    desired_hedge_position = -desired_hedge_position
                 
                 # Calculate the difference between the desired hedge and current AMETHYSTS position
                 hedge_difference = desired_hedge_position - amethysts_position
@@ -279,11 +294,12 @@ class Trader:
                     orders.append(Order(product, best_ask, hedge_difference))
                 elif hedge_difference < 0:
                     # If hedge_difference is negative, sell AMETHYSTS to match the hedge
-                    print(f"Selling {-hedge_difference} AMETHYSTS to match the hedge")
+                    print(f"Selling {hedge_difference} AMETHYSTS to match the hedge")
                     orders.append(Order(product, best_bid, hedge_difference))
                 else:
                     # If hedge_difference is 0, no action is needed
                     print("No hedge adjustment needed for AMETHYSTS")
+                continue
 
 
             if acceptable_price == "No Fair Value":
@@ -295,22 +311,32 @@ class Trader:
             if len(order_depth.sell_orders) != 0:
                 best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
                 price_deviation_percentage = float(best_ask) / acceptable_price - 1
-                if price_deviation_percentage < -0.0005:
+                if price_deviation_percentage < -0.0001:
                     adjusted_order_size = self.calculate_order_size(
                         price_deviation_percentage, base_order_size
                     )
                     print("\n Placing order: BUY", str(adjusted_order_size) + "x", best_ask, self.product_str, "\n")
+                    max_limit = self.LIMITS.get(product, float('inf'))  # Use a default very high limit if not specified
+                    # Calculate potential new position after order
+                    potential_position = state.position.get("STARFRUIT", 0) + adjusted_order_size
+
+                    # Adjust order size if it exceeds the limit
+                    if potential_position > max_limit:
+                        adjusted_order_size = max_limit - state.position.get("STARFRUIT", 0)
+                        # Make sure the adjusted order size is not negative
+                        adjusted_order_size = max(adjusted_order_size, 0)
                     orders.append(Order(product, best_ask, -adjusted_order_size))
 
             if len(order_depth.buy_orders) != 0:
                 best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
                 price_deviation_percentage = float(best_bid) / acceptable_price - 1
-                if price_deviation_percentage > 0.0005:
+                if price_deviation_percentage > 0.0002:
                     adjusted_order_size = self.calculate_order_size(
                         price_deviation_percentage,
                         base_order_size,
                     )  # Use negative scaling factor for selling
                     print("\n Placing order: SELL", str(adjusted_order_size) + "x", best_bid, self.product_str, "\n")
+
                     orders.append(Order(product, best_bid, -adjusted_order_size))
 
             result[product] = orders
