@@ -246,7 +246,7 @@ class Trader:
             orders: List[Order] = []
             # Define a fair value for the PRODUCT. Might be different for each tradable item
             acceptable_price = self.calculate_convictions_naive(order_depth)
-            if str(product) == "AMETHYSTS":
+            if str(product) == "AMETHYSTS": # if we're dealing with amethysts
                 # amethysts are stable, we won't make a market on them
                 # rather we will look to hedge our positions
                 # 1. let's get our exposure to STARFRUIT
@@ -299,45 +299,45 @@ class Trader:
                 else:
                     # If hedge_difference is 0, no action is needed
                     print("No hedge adjustment needed for AMETHYSTS")
-                continue
 
+            else: # if we're dealing with starfruits
+                if acceptable_price == "No Fair Value":
+                    continue
+                print("\n calculated fair value : " + str(acceptable_price), "\n")
 
-            if acceptable_price == "No Fair Value":
-                continue
-            print("\n calculated fair value : " + str(acceptable_price), "\n")
+                base_order_size = 1  # This is your base order size, adjust as necessary
 
-            base_order_size = 1  # This is your base order size, adjust as necessary
+                if len(order_depth.sell_orders) != 0:
+                    best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+                    price_deviation_percentage = float(best_ask) / acceptable_price - 1
+                    print("Price deviation percentage: ", price_deviation_percentage)
+                    if price_deviation_percentage < -0.0001:
+                        adjusted_order_size = self.calculate_order_size(
+                            price_deviation_percentage, base_order_size
+                        )
+                        print("\n Placing order: BUY", str(adjusted_order_size) + "x", best_ask, self.product_str, "\n")
+                        max_limit = self.LIMITS.get(product, float('inf'))  # Use a default very high limit if not specified
+                        # Calculate potential new position after order
+                        potential_position = state.position.get("STARFRUIT", 0) + adjusted_order_size
 
-            if len(order_depth.sell_orders) != 0:
-                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-                price_deviation_percentage = float(best_ask) / acceptable_price - 1
-                if price_deviation_percentage < -0.0001:
-                    adjusted_order_size = self.calculate_order_size(
-                        price_deviation_percentage, base_order_size
-                    )
-                    print("\n Placing order: BUY", str(adjusted_order_size) + "x", best_ask, self.product_str, "\n")
-                    max_limit = self.LIMITS.get(product, float('inf'))  # Use a default very high limit if not specified
-                    # Calculate potential new position after order
-                    potential_position = state.position.get("STARFRUIT", 0) + adjusted_order_size
+                        # Adjust order size if it exceeds the limit
+                        if potential_position > max_limit:
+                            adjusted_order_size = max_limit - state.position.get("STARFRUIT", 0)
+                            # Make sure the adjusted order size is not negative
+                            adjusted_order_size = max(adjusted_order_size, 0)
+                        orders.append(Order(product, best_ask, -adjusted_order_size))
 
-                    # Adjust order size if it exceeds the limit
-                    if potential_position > max_limit:
-                        adjusted_order_size = max_limit - state.position.get("STARFRUIT", 0)
-                        # Make sure the adjusted order size is not negative
-                        adjusted_order_size = max(adjusted_order_size, 0)
-                    orders.append(Order(product, best_ask, -adjusted_order_size))
+                if len(order_depth.buy_orders) != 0:
+                    best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+                    price_deviation_percentage = float(best_bid) / acceptable_price - 1
+                    if price_deviation_percentage > 0.0001:
+                        adjusted_order_size = self.calculate_order_size(
+                            price_deviation_percentage,
+                            base_order_size,
+                        )  # Use negative scaling factor for selling
+                        print("\n Placing order: SELL", str(adjusted_order_size) + "x", best_bid, self.product_str, "\n")
 
-            if len(order_depth.buy_orders) != 0:
-                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-                price_deviation_percentage = float(best_bid) / acceptable_price - 1
-                if price_deviation_percentage > 0.0002:
-                    adjusted_order_size = self.calculate_order_size(
-                        price_deviation_percentage,
-                        base_order_size,
-                    )  # Use negative scaling factor for selling
-                    print("\n Placing order: SELL", str(adjusted_order_size) + "x", best_bid, self.product_str, "\n")
-
-                    orders.append(Order(product, best_bid, -adjusted_order_size))
+                        orders.append(Order(product, best_bid, -adjusted_order_size))
 
             result[product] = orders
 
@@ -345,10 +345,13 @@ class Trader:
         # indicators
         # it has to be a string so we have to do some wild shit
         try:
-            traderData = (
-                state.traderData
-                + f"{product},{state.timestamp},{best_bid},{best_bid_amount},{best_ask},{best_ask_amount}\n"
-            )
+            if str(product) != "AMETHYSTS":
+                traderData = (
+                    state.traderData
+                    + f"{product},{state.timestamp},{best_bid},{best_bid_amount},{best_ask},{best_ask_amount}\n"
+                )
+            else:
+                traderData = state.traderData
         except:
             traderData = state.traderData
         # Sample conversion request. Check more details below.
