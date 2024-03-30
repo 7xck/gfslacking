@@ -234,6 +234,7 @@ class Trader:
 
         print("Observations: " + str(state.observations))
         print("Own trades: " + str(state.own_trades))
+        print("Market trades: " + str(state.market_trades))
         print("\n positions: \n" + str(state.position))
 
         # Orders to be placed on exchange matching engine
@@ -316,16 +317,7 @@ class Trader:
                             price_deviation_percentage, base_order_size
                         )
                         print("\n Placing order: BUY", str(adjusted_order_size) + "x", best_ask, self.product_str, "\n")
-                        max_limit = self.LIMITS.get(product, float('inf'))  # Use a default very high limit if not specified
-                        # Calculate potential new position after order
-                        potential_position = state.position.get("STARFRUIT", 0) + adjusted_order_size
-
-                        # Adjust order size if it exceeds the limit
-                        if potential_position > max_limit:
-                            adjusted_order_size = max_limit - state.position.get("STARFRUIT", 0)
-                            # Make sure the adjusted order size is not negative
-                            adjusted_order_size = max(adjusted_order_size, 0)
-                        orders.append(Order(product, best_ask, -adjusted_order_size))
+                        orders.append(Order(product, best_ask, adjusted_order_size))
 
                 if len(order_depth.buy_orders) != 0:
                     best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
@@ -336,7 +328,6 @@ class Trader:
                             base_order_size,
                         )  # Use negative scaling factor for selling
                         print("\n Placing order: SELL", str(adjusted_order_size) + "x", best_bid, self.product_str, "\n")
-
                         orders.append(Order(product, best_bid, -adjusted_order_size))
 
             result[product] = orders
@@ -376,7 +367,7 @@ class Trader:
 
         return int(final_order_size)
 
-    def calculate_convictions_naive(self, orderbook, depth=3):
+    def calculate_convictions_naive(self, orderbook, depth=4):
         # Calculate VWAP for bids, considering only the top 'depth' levels
         total_bid_volume = 0
         total_bid_value = 0
@@ -389,6 +380,7 @@ class Trader:
         total_ask_volume = 0
         total_ask_value = 0
         for ask_price, ask_amount in list(orderbook.sell_orders.items())[:depth]:
+            ask_amount = abs(ask_amount)
             total_ask_volume += ask_amount
             total_ask_value += ask_price * ask_amount
         ask_vwap = total_ask_value / total_ask_volume if total_ask_volume > 0 else 0
@@ -473,6 +465,7 @@ class Trader:
 
         bid, best_bid_amount = list(self.orderbook.buy_orders.items())[0]
         ask, best_ask_amount = list(self.orderbook.sell_orders.items())[0]
+        best_ask_amount = best_ask_amount * -1
         mid = (bid + ask) / 2
         imb = best_bid_amount / (best_bid_amount + best_ask_amount)
         imb_bucket = [abs(x - imb) for x in G_star.columns].index(min([abs(x - imb) for x in G_star.columns]))
