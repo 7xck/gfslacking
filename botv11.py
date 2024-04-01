@@ -127,28 +127,45 @@ class Trader:
             elif str(product) == "STARFRUIT": # if we're dealing with starfruits
                 if acceptable_price == "No Fair Value":
                     continue
-                base_order_size = 1  # This is your base order size, adjust as necessary
+                base_order_size = 5
+                # what is the current spread?
+                tick_size = 1  # This is your base order size, adjust as necessary
+                
+                # if the book is quoting a price that is too high on both sides, 
+                # we will try to sell all of our position
+                if best_ask > acceptable_price and best_bid > acceptable_price:
+                    if starfruit_position > 0:
+                        orders.append(Order(product, best_bid, -starfruit_position))
+                    else:
+                        # we will sell a bit more
+                        orders.append(Order(product, best_bid, -base_order_size))
+                
+                # if the book is quoting a price that is too low on both sides,
+                # we will try to buy all of our position
+                elif best_ask < acceptable_price and best_bid < acceptable_price:
+                    if starfruit_position < 0:
+                        orders.append(Order(product, best_ask, -starfruit_position))
+                    else:
+                        # we will buy a bit more
+                        orders.append(Order(product, best_ask, base_order_size))
 
-                if len(order_depth.sell_orders) != 0:
-                    price_deviation_percentage = float(best_ask) / acceptable_price - 1
-                    print("Price deviation percentage: ", price_deviation_percentage)
-                    if price_deviation_percentage < -0.0001:
-                        adjusted_order_size = self.calculate_order_size(
-                            price_deviation_percentage, base_order_size
-                        )
-                        print("\n Placing order: BUY", str(adjusted_order_size) + "x", best_ask, self.product_str, "\n")
-                        orders.append(Order(product, best_ask, adjusted_order_size))
+                # we know from analysis that the price of starfruits is generally
+                # 0.05% away from my calculated fair value ( which is the vwap )
+                # so we will make the book accordingly with order size 1
+                else:
+                    # Calculate the order size based on the deviation from the fair value
+                    price_deviation_percentage = best_bid / acceptable_price - 1
+                    if price_deviation_percentage < -0.0006:
+                        # work out what the bid price should be to make the price deviation 0.05%
+                        acceptable_bid = round(acceptable_price - (acceptable_price * 0.0005))
+                        orders.append(Order(product, acceptable_bid, base_order_size))
+                    price_deviation_percentage = best_ask / acceptable_price - 1
+                    if price_deviation_percentage > 0.0006:
+                        # work out what the ask price should be to make the price deviation 0.05%
+                        acceptable_ask = round(acceptable_price + (acceptable_price * 0.0005))
+                        orders.append(Order(product, acceptable_ask, -base_order_size))
+                        
 
-                if len(order_depth.buy_orders) != 0:
-                    price_deviation_percentage = float(best_bid) / acceptable_price - 1
-                    if price_deviation_percentage > 0.0001:
-                        adjusted_order_size = self.calculate_order_size(
-                            price_deviation_percentage,
-                            base_order_size,
-                        )  # Use negative scaling factor for selling
-                        print("\n Placing order: SELL", str(adjusted_order_size) + "x", best_bid, self.product_str, "\n")
-                        orders.append(Order(product, best_bid, -adjusted_order_size))
-           
             # what ever product is was, we want to append the orders to the result
             result[product] = orders
 
@@ -158,14 +175,14 @@ class Trader:
 
             if market_trades != []:
                 for trade in market_trades:
-                    traderData = (
+                    state.traderData = (
                         state.traderData
                         + f"{str(trade.symbol)},{trade.price},{trade.quantity},{trade.timestamp}\n"
                     )
         
         # Sample conversion request. Check more details below.
         conversions = 1
-        return result, conversions, traderData
+        return result, conversions, state.traderData
 
     def calculate_order_size(
         self, price_deviation_percentage, base_order_size, scaling_factor=1000
@@ -185,7 +202,7 @@ class Trader:
 
         return int(final_order_size)
 
-    def calculate_convictions_naive(self, orderbook, depth=4):
+    def calculate_convictions_naive(self, orderbook, depth=3):
         # Calculate VWAP for bids, considering only the top 'depth' levels
         total_bid_volume = 0
         total_bid_value = 0
