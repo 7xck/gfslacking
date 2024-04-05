@@ -46,6 +46,13 @@ class Trader:
     # run() is the main function. This is what gets called when the bot is uploaded and executed to the platform.
     # Order depth list come already sorted.
 
+    def get_remaining_position_limit(self):
+        # doing this for starfruits only, will probs have to do for amethysts later
+        # we will use this to calculate the position limit
+        # we will use the inventory to calculate the position limit
+        remaining = self.LIMITS["STARFRUIT"] - abs(self.starfruit_position)
+        return remaining
+
     def run(self, state: TradingState):
         self.LIMITS = {"AMETHYSTS": 20, "STARFRUIT": 20}
 
@@ -63,6 +70,9 @@ class Trader:
         
         starfruit_position = state.position.get("STARFRUIT", 0)
         amethysts_position = state.position.get("AMETHYSTS", 0)
+
+        self.starfruit_position = starfruit_position
+
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths:
@@ -127,9 +137,9 @@ class Trader:
             elif str(product) == "STARFRUIT": # if we're dealing with starfruits
                 if acceptable_price == "No Fair Value":
                     continue
-                base_order_size = 5
+                base_order_size = 5 # This is your base order size, adjust as necessary
                 # what is the current spread?
-                tick_size = 1  # This is your base order size, adjust as necessary
+                tick_size = 1  
                 
                 # if the book is quoting a price that is too high on both sides, 
                 # we will try to sell all of our position
@@ -138,7 +148,13 @@ class Trader:
                         orders.append(Order(product, best_bid, -starfruit_position))
                     else:
                         # we will sell a bit more
-                        orders.append(Order(product, best_bid, -base_order_size))
+                        remaining_size = self.get_remaining_position_limit()
+                        if remaining_size >= base_order_size*2:
+                            orders.append(Order(product, best_bid, -base_order_size*2))
+                        elif remaining_size >= base_order_size:
+                            orders.append(Order(product, best_bid, -base_order_size))
+                        elif remaining_size > 0:
+                            orders.append(Order(product, best_bid, -remaining_size))
                 
                 # if the book is quoting a price that is too low on both sides,
                 # we will try to buy all of our position
@@ -147,23 +163,42 @@ class Trader:
                         orders.append(Order(product, best_ask, -starfruit_position))
                     else:
                         # we will buy a bit more
-                        orders.append(Order(product, best_ask, base_order_size))
+                        remaining_size = self.get_remaining_position_limit()
+                        if remaining_size >= base_order_size*2:
+                            orders.append(Order(product, best_ask, base_order_size*2))
+                        elif remaining_size >= base_order_size:
+                            orders.append(Order(product, best_ask, base_order_size))
+                        elif remaining_size > 0:
+                            orders.append(Order(product, best_ask, remaining_size))
 
                 # we know from analysis that the price of starfruits is generally
                 # 0.05% away from my calculated fair value ( which is the vwap )
                 # so we will make the book accordingly with order size 1
                 else:
                     # Calculate the order size based on the deviation from the fair value
+                    acceptable_ask_deviation = 0.0005
+                    acceptable_bid_deviation = 0.0005
+                    bid_size = base_order_size
+                    ask_size = base_order_size
+                    # if position size is close to the limit, we probably want to be more aggressive in unloading that inventory
+                    if starfruit_position < -0.75 * self.LIMITS["STARFRUIT"]:
+                        acceptable_bid_deviation = 0.0003
+                        bid_size = base_order_size * 2
+                    elif starfruit_position > 0.75 * self.LIMITS["STARFRUIT"]:
+                        acceptable_ask_deviation = 0.0003
+                        ask_size = base_order_size * 2
+
                     price_deviation_percentage = best_bid / acceptable_price - 1
-                    if price_deviation_percentage < -0.0006:
+                    if price_deviation_percentage < -acceptable_bid_deviation:
                         # work out what the bid price should be to make the price deviation 0.05%
-                        acceptable_bid = round(acceptable_price - (acceptable_price * 0.0005))
-                        orders.append(Order(product, acceptable_bid, base_order_size))
+                        acceptable_bid = round(acceptable_price - (acceptable_price * (acceptable_bid_deviation-0.0001)))
+                        orders.append(Order(product, acceptable_bid, bid_size))
+
                     price_deviation_percentage = best_ask / acceptable_price - 1
-                    if price_deviation_percentage > 0.0006:
+                    if price_deviation_percentage > acceptable_ask_deviation:
                         # work out what the ask price should be to make the price deviation 0.05%
-                        acceptable_ask = round(acceptable_price + (acceptable_price * 0.0005))
-                        orders.append(Order(product, acceptable_ask, -base_order_size))
+                        acceptable_ask = round(acceptable_price + (acceptable_price * (acceptable_ask_deviation-0.0001)))
+                        orders.append(Order(product, acceptable_ask, -ask_size))
                         
 
             # what ever product is was, we want to append the orders to the result
