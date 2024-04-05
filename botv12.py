@@ -176,8 +176,8 @@ class Trader:
                 # so we will make the book accordingly with order size 1
                 else:
                     # Calculate the order size based on the deviation from the fair value
-                    acceptable_ask_deviation = 0.0005
-                    acceptable_bid_deviation = 0.0005
+                    acceptable_ask_deviation = 0.0006
+                    acceptable_bid_deviation = 0.0006
                     bid_size = base_order_size
                     ask_size = base_order_size
                     # if position size is close to the limit, we probably want to be more aggressive in unloading that inventory
