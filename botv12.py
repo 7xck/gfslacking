@@ -1,14 +1,14 @@
 import json
-from typing import Dict, List
-from json import JSONEncoder
-import jsonpickle
+from typing import List
 import io
-import numpy as np
 import pandas as pd
-pd.set_option('mode.chained_assignment', None)
 import warnings
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Trade, TradingState
+from typing import Any
+
+pd.set_option('mode.chained_assignment', None)
 warnings.simplefilter(action='ignore', category=UserWarning)
-from datamodel import OrderDepth, UserId, TradingState, Order
+
 Time = int
 Symbol = str
 Product = str
@@ -17,27 +17,113 @@ UserId = str
 ObservationValue = int
 
 
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+        self.max_log_length = 3750
 
-def block_diag(*arrs):
-    if arrs == ():
-        arrs = ([],)
-    arrs = [np.atleast_2d(a) for a in arrs]
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
 
-    bad_args = [k for k in range(len(arrs)) if arrs[k].ndim > 2]
-    if bad_args:
-        raise ValueError("arguments in the following positions have dimension "
-                         "greater than 2: %s" % bad_args)
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        base_length = len(self.to_json([
+            self.compress_state(state, ""),
+            self.compress_orders(orders),
+            conversions,
+            "",
+            "",
+        ]))
 
-    shapes = np.array([a.shape for a in arrs])
-    out_dtype = np.result_type(*[arr.dtype for arr in arrs])
-    out = np.zeros(np.sum(shapes, axis=0), dtype=out_dtype)
+        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
+        max_item_length = (self.max_log_length - base_length) // 3
 
-    r, c = 0, 0
-    for i, (rr, cc) in enumerate(shapes):
-        out[r:r + rr, c:c + cc] = arrs[i]
-        r += rr
-        c += cc
-    return out
+        print(self.to_json([
+            self.compress_state(state, self.truncate(state.traderData, max_item_length)),
+            self.compress_orders(orders),
+            conversions,
+            self.truncate(trader_data, max_item_length),
+            self.truncate(self.logs, max_item_length),
+        ]))
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+        return [
+            state.timestamp,
+            trader_data,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append([listing["symbol"], listing["product"], listing["denomination"]])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append([
+                    trade.symbol,
+                    trade.price,
+                    trade.quantity,
+                    trade.buyer,
+                    trade.seller,
+                    trade.timestamp,
+                ])
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sunlight,
+                observation.humidity,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+
+    def to_json(self, value: Any) -> str:
+        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
+
+    def truncate(self, value: str, max_length: int) -> str:
+        if len(value) <= max_length:
+            return value
+
+        return value[:max_length - 3] + "..."
+
+
+logger = Logger()
+
+
 # Just collapse all the above in whatever IDE you're in.
 
 
@@ -55,6 +141,8 @@ class Trader:
 
     def run(self, state: TradingState):
         self.LIMITS = {"AMETHYSTS": 20, "STARFRUIT": 20}
+        conversions = 0
+        result = {}
 
         try:
             data = io.StringIO(state.traderData)
@@ -63,18 +151,18 @@ class Trader:
         except:
             self.df = pd.DataFrame(columns=["product", "price", "quantity", "timestamp"])
 
-        #print("Dataframe entries", self.df.tail(1))
+        # print("Dataframe entries", self.df.tail(1))
 
-        print("Market trades: " + str(state.market_trades))
-        print("\n Positions: \n" + str(state.position))
-        
+        logger.print("Market trades: " + str(state.market_trades))
+        logger.print("\n Positions: \n" + str(state.position))
+
         starfruit_position = state.position.get("STARFRUIT", 0)
         amethysts_position = state.position.get("AMETHYSTS", 0)
 
         self.starfruit_position = starfruit_position
 
         # Orders to be placed on exchange matching engine
-        result = {}
+
         for product in state.order_depths:
             order_depth: OrderDepth = state.order_depths[product]
             self.product_str = str(product)
@@ -85,62 +173,18 @@ class Trader:
             orders: List[Order] = []
             # Define a fair value for the PRODUCT. Might be different for each tradable item
             acceptable_price = self.calculate_convictions_naive(order_depth)
-            print("\n calculated fair value : " + str(acceptable_price), "\n")
+            logger.print("\n calculated fair value : " + str(acceptable_price), "\n")
 
-            if str(product) == "AMETHYSTS": # if we're dealing with amethysts
-                # amethysts are stable, we won't make a market on them
-                # rather we will look to hedge our positions
-                # 1. let's get our exposure to STARFRUIT
-                if state.position == {}:  # if we have no position
-                    continue
-                if starfruit_position == 0:
-                    continue
+            if str(product) == "AMETHYSTS":  # if we're dealing with amethysts
+                pass
 
-                # Calculate the hedge for STARFRUIT
-                beta = 0.1207 # ... i calced this from linear regression using the data in large_price_history, usually you would calc it from a rolling window
-                desired_hedge_position = round(beta * starfruit_position)
-                # for the first round we will hope the products behave the same way
-                # in the next round we will take the new data we're given for these products and then start
-                # calculating beta on the fly so there's no future leak
-                # and the hedge is more responsive.
-                # Rationale for hedges: Looking at the data AMETHYSTS are a very stable product, they do not really move much
-                # but it's likely that the price of amethysts are related to starfruit in some way, so we will hedge our position in starfruit
-                # if the price of starfruits changes for some reason, we will be protected by our amethysts position which may follow the same trend
-                # in practice: say starfruits go up because there is a shortage, we will lose money on our short position in starfruits
-                # but because we can see from the data that amethysts generally move the same way as starfruits in the short term, we will make money on our long position in amethysts
-                # thereby reducing the loss we take on our short position in starfruits.
-                
-                if starfruit_position > 0: 
-                    # we are long starfruits so we want to short amethysts
-                    desired_hedge_position = -desired_hedge_position
-                if starfruit_position < 0:
-                    # we are short starfruits so we want to long amethysts
-                    desired_hedge_position = -desired_hedge_position
-                # Calculate the difference between the desired hedge and current AMETHYSTS position
-                hedge_difference = desired_hedge_position - amethysts_position
-                
-                print("Hedge: ", desired_hedge_position)
-                print("Hedge difference: ", hedge_difference)
-                
-                if hedge_difference > 0:
-                    # If hedge_difference is positive, buy AMETHYSTS to match the hedge
-                    print(f"Buying {hedge_difference} AMETHYSTS to match the hedge")
-                    orders.append(Order(product, best_ask, hedge_difference))
-                elif hedge_difference < 0:
-                    # If hedge_difference is negative, sell AMETHYSTS to match the hedge
-                    print(f"Selling {hedge_difference} AMETHYSTS to match the hedge")
-                    orders.append(Order(product, best_bid, hedge_difference))
-                else:
-                    # If hedge_difference is 0, no action is needed
-                    print("No hedge adjustment needed for AMETHYSTS")
-
-            elif str(product) == "STARFRUIT": # if we're dealing with starfruits
+            elif str(product) == "STARFRUIT":  # if we're dealing with starfruits
                 if acceptable_price == "No Fair Value":
                     continue
-                base_order_size = 5 # This is your base order size, adjust as necessary
+                base_order_size = 5  # This is your base order size, adjust as necessary
                 # what is the current spread?
-                tick_size = 1  
-                
+                tick_size = 1
+
                 # if the book is quoting a price that is too high on both sides, 
                 # we will try to sell all of our position
                 if best_ask > acceptable_price and best_bid > acceptable_price:
@@ -149,13 +193,13 @@ class Trader:
                     else:
                         # we will sell a bit more
                         remaining_size = self.get_remaining_position_limit()
-                        if remaining_size >= base_order_size*2:
-                            orders.append(Order(product, best_bid, -base_order_size*2))
+                        if remaining_size >= base_order_size * 2:
+                            orders.append(Order(product, best_bid, -base_order_size * 2))
                         elif remaining_size >= base_order_size:
                             orders.append(Order(product, best_bid, -base_order_size))
                         elif remaining_size > 0:
                             orders.append(Order(product, best_bid, -remaining_size))
-                
+
                 # if the book is quoting a price that is too low on both sides,
                 # we will try to buy all of our position
                 elif best_ask < acceptable_price and best_bid < acceptable_price:
@@ -164,8 +208,8 @@ class Trader:
                     else:
                         # we will buy a bit more
                         remaining_size = self.get_remaining_position_limit()
-                        if remaining_size >= base_order_size*2:
-                            orders.append(Order(product, best_ask, base_order_size*2))
+                        if remaining_size >= base_order_size * 2:
+                            orders.append(Order(product, best_ask, base_order_size * 2))
                         elif remaining_size >= base_order_size:
                             orders.append(Order(product, best_ask, base_order_size))
                         elif remaining_size > 0:
@@ -191,36 +235,38 @@ class Trader:
                     price_deviation_percentage = best_bid / acceptable_price - 1
                     if price_deviation_percentage < -acceptable_bid_deviation:
                         # work out what the bid price should be to make the price deviation 0.05%
-                        acceptable_bid = round(acceptable_price - (acceptable_price * (acceptable_bid_deviation-0.0001)))
+                        acceptable_bid = round(
+                            acceptable_price - (acceptable_price * (acceptable_bid_deviation - 0.0001)))
                         orders.append(Order(product, acceptable_bid, bid_size))
 
                     price_deviation_percentage = best_ask / acceptable_price - 1
                     if price_deviation_percentage > acceptable_ask_deviation:
                         # work out what the ask price should be to make the price deviation 0.05%
-                        acceptable_ask = round(acceptable_price + (acceptable_price * (acceptable_ask_deviation-0.0001)))
+                        acceptable_ask = round(
+                            acceptable_price + (acceptable_price * (acceptable_ask_deviation - 0.0001)))
                         orders.append(Order(product, acceptable_ask, -ask_size))
-                        
 
-            # what ever product is was, we want to append the orders to the result
+            # what ever product it was, we want to append the orders to the result
             result[product] = orders
 
-            # let's use traderData as a historical store of the book so we can calculate some
+            # let's use traderData as a historical store of the book, so we can calculate some
             # indicators
             market_trades = state.market_trades.get(self.product_str, [])
 
-            if market_trades != []:
+            if market_trades:
                 for trade in market_trades:
                     state.traderData = (
-                        state.traderData
-                        + f"{str(trade.symbol)},{trade.price},{trade.quantity},{trade.timestamp}\n"
+                            state.traderData
+                            + f"{str(trade.symbol)},{trade.price},{trade.quantity},{trade.timestamp}\n"
                     )
-        
+
         # Sample conversion request. Check more details below.
-        conversions = 1
+
+        logger.flush(state, result, conversions, state.traderData)
         return result, conversions, state.traderData
 
     def calculate_order_size(
-        self, price_deviation_percentage, base_order_size, scaling_factor=1000
+            self, price_deviation_percentage, base_order_size, scaling_factor=1000
     ):
         """
         Calculate the order size based on price deviation.
@@ -265,5 +311,3 @@ class Trader:
         else:  # No bids or asks
             fair_value = 0
         return fair_value
-
-
