@@ -215,8 +215,8 @@ class Trader:
                         elif remaining_size > 0:
                             orders.append(Order(product, best_ask, remaining_size))
 
-                # we know from analysis that the price of starfruits is generally
-                # 0.05% away from my calculated fair value ( which is the vwap )
+                # we know from analysis that the price of starfruit is generally
+                # 0.05% away from my calculated fair value ( which is the VWAP )
                 # so we will make the book accordingly with order size 1
                 else:
                     # Calculate the order size based on the deviation from the fair value
@@ -224,13 +224,16 @@ class Trader:
                     acceptable_bid_deviation = 0.0006
                     bid_size = base_order_size
                     ask_size = base_order_size
-                    # if position size is close to the limit, we probably want to be more aggressive in unloading that inventory
+                    # if position size is close to the limit, we probably want to be more aggressive in unloading
+                    # that inventory
                     if starfruit_position < -0.75 * self.LIMITS["STARFRUIT"]:
                         acceptable_bid_deviation = 0.0003
                         bid_size = base_order_size * 2
+                        ask_size = self.LIMITS["STARFRUIT"] + starfruit_position
                     elif starfruit_position > 0.75 * self.LIMITS["STARFRUIT"]:
                         acceptable_ask_deviation = 0.0003
                         ask_size = base_order_size * 2
+                        bid_size = self.LIMITS["STARFRUIT"] - starfruit_position
 
                     price_deviation_percentage = best_bid / acceptable_price - 1
                     if price_deviation_percentage < -acceptable_bid_deviation:
@@ -264,24 +267,6 @@ class Trader:
 
         logger.flush(state, result, conversions, state.traderData)
         return result, conversions, state.traderData
-
-    def calculate_order_size(
-            self, price_deviation_percentage, base_order_size, scaling_factor=1000
-    ):
-        """
-        Calculate the order size based on price deviation.
-        :param price_deviation_percentage: The percentage deviation of price from the acceptable price.
-        :param base_order_size: The base size of the order.
-        :param scaling_factor: A factor to adjust how aggressively the order size scales with price deviation.
-        :return: The adjusted order size.
-        """
-        # Calculate the scaling multiplier based on price deviation
-        scaling_multiplier = 1 + abs(price_deviation_percentage) * scaling_factor
-
-        # Calculate the final order size
-        final_order_size = base_order_size * scaling_multiplier
-
-        return int(final_order_size)
 
     def calculate_convictions_naive(self, orderbook, depth=3):
         # Calculate VWAP for bids, considering only the top 'depth' levels
