@@ -176,7 +176,75 @@ class Trader:
             logger.print("\n calculated fair value : " + str(acceptable_price), "\n")
 
             if str(product) == "AMETHYSTS":  # if we're dealing with amethysts
-                pass
+                if acceptable_price == "No Fair Value":
+                    continue
+                base_order_size = 5  # This is your base order size, adjust as necessary
+                # what is the current spread?
+                tick_size = 1
+
+                # if the book is quoting a price that is too high on both sides,
+                # we will try to sell all of our position
+                if best_ask > acceptable_price and best_bid > acceptable_price:
+                    if amethysts_position > 0:
+                        orders.append(Order(product, best_bid, -amethysts_position))
+                    else:
+                        # we will sell a bit more
+                        remaining_size = self.get_remaining_position_limit()
+                        if remaining_size >= base_order_size * 2:
+                            orders.append(Order(product, best_bid, -base_order_size * 2))
+                        elif remaining_size >= base_order_size:
+                            orders.append(Order(product, best_bid, -base_order_size))
+                        elif remaining_size > 0:
+                            orders.append(Order(product, best_bid, -remaining_size))
+
+                # if the book is quoting a price that is too low on both sides,
+                # we will try to buy all of our position
+                elif best_ask < acceptable_price and best_bid < acceptable_price:
+                    if amethysts_position < 0:
+                        orders.append(Order(product, best_ask, -amethysts_position))
+                    else:
+                        # we will buy a bit more
+                        remaining_size = self.get_remaining_position_limit()
+                        if remaining_size >= base_order_size * 2:
+                            orders.append(Order(product, best_ask, base_order_size * 2))
+                        elif remaining_size >= base_order_size:
+                            orders.append(Order(product, best_ask, base_order_size))
+                        elif remaining_size > 0:
+                            orders.append(Order(product, best_ask, remaining_size))
+
+                # we know from analysis that the price of starfruit is generally
+                # 0.05% away from my calculated fair value ( which is the VWAP )
+                # so we will make the book accordingly with order size 1
+                else:
+                    # Calculate the order size based on the deviation from the fair value
+                    acceptable_ask_deviation = 0.00035
+                    acceptable_bid_deviation = 0.00035
+                    bid_size = base_order_size
+                    ask_size = base_order_size
+                    # if position size is close to the limit, we probably want to be more aggressive in unloading
+                    # that inventory
+                    if starfruit_position < -0.75 * self.LIMITS["AMETHYSTS"]:
+                        acceptable_bid_deviation = 0.0003
+                        bid_size = base_order_size * 2
+                        ask_size = self.LIMITS["AMETHYSTS"] + amethysts_position
+                    elif starfruit_position > 0.75 * self.LIMITS["AMETHYSTS"]:
+                        acceptable_ask_deviation = 0.0003
+                        ask_size = base_order_size * 2
+                        bid_size = self.LIMITS["AMETHYSTS"] - amethysts_position
+
+                    price_deviation_percentage = best_bid / acceptable_price - 1
+                    if price_deviation_percentage < -acceptable_bid_deviation:
+                        # work out what the bid price should be to make the price deviation 0.05%
+                        acceptable_bid = round(
+                            acceptable_price - (acceptable_price * (acceptable_bid_deviation - 0.00005)))
+                        orders.append(Order(product, acceptable_bid, bid_size))
+
+                    price_deviation_percentage = best_ask / acceptable_price - 1
+                    if price_deviation_percentage > acceptable_ask_deviation:
+                        # work out what the ask price should be to make the price deviation 0.05%
+                        acceptable_ask = round(
+                            acceptable_price + (acceptable_price * (acceptable_ask_deviation - 0.00005)))
+                        orders.append(Order(product, acceptable_ask, -ask_size))
 
             elif str(product) == "STARFRUIT":  # if we're dealing with starfruits
                 if acceptable_price == "No Fair Value":
