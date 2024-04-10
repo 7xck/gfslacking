@@ -124,9 +124,6 @@ class Logger:
 logger = Logger()
 
 
-# Just collapse all the above in whatever IDE you're in.
-
-
 class Trader:
     # Notes:
     # run() is the main function. This is what gets called when the bot is uploaded and executed to the platform.
@@ -147,11 +144,9 @@ class Trader:
         try:
             data = io.StringIO(state.traderData)
             self.df = pd.read_csv(data, )
-            self.df.columns = ["product", "price", "quantity", "timestamp"]
+            self.df.columns = ["product", "timestamp", "price_deviation_bid", "price_deviation_ask"]
         except:
-            self.df = pd.DataFrame(columns=["product", "price", "quantity", "timestamp"])
-
-        # print("Dataframe entries", self.df.tail(1))
+            self.df = pd.DataFrame(columns=["product", "timestamp", "price_deviation_bid", "price_deviation_ask"])
 
         logger.print("Market trades: " + str(state.market_trades))
         logger.print("\n Positions: \n" + str(state.position))
@@ -164,6 +159,9 @@ class Trader:
         # Orders to be placed on exchange matching engine
 
         for product in state.order_depths:
+            avg_bid_deviation = self.df[self.df["product"] == str(product)]["price_deviation_bid"].mean()
+            avg_ask_deviation = self.df[self.df["product"] == str(product)]["price_deviation_ask"].mean()
+            logger.print("\n Average Bid Deviation: " + str(avg_bid_deviation), "\n", "Average Ask Deviation: " + str(avg_ask_deviation), "\n")
             order_depth: OrderDepth = state.order_depths[product]
             self.product_str = str(product)
             self.orderbook = order_depth
@@ -174,6 +172,8 @@ class Trader:
             # Define a fair value for the PRODUCT. Might be different for each tradable item
             acceptable_price = self.calculate_convictions_naive(order_depth)
             logger.print("\n calculated fair value : " + str(acceptable_price), "\n")
+            price_deviation_percentage_bid = best_bid / acceptable_price - 1
+            price_deviation_percentage_ask = best_ask / acceptable_price - 1
 
             if str(product) == "AMETHYSTS":  # if we're dealing with amethysts
                 if acceptable_price == "No Fair Value":
@@ -223,24 +223,22 @@ class Trader:
                     ask_size = base_order_size
                     # if position size is close to the limit, we probably want to be more aggressive in unloading
                     # that inventory
-                    if starfruit_position < -0.75 * self.LIMITS["AMETHYSTS"]:
-                        acceptable_bid_deviation = 0.0003
+                    if starfruit_position <= -0.75 * self.LIMITS["AMETHYSTS"]:
+                        acceptable_bid_deviation = 0.0002
                         bid_size = base_order_size * 2
                         ask_size = self.LIMITS["AMETHYSTS"] + amethysts_position
-                    elif starfruit_position > 0.75 * self.LIMITS["AMETHYSTS"]:
-                        acceptable_ask_deviation = 0.0003
+                    elif starfruit_position >= 0.75 * self.LIMITS["AMETHYSTS"]:
+                        acceptable_ask_deviation = 0.0002
                         ask_size = base_order_size * 2
                         bid_size = self.LIMITS["AMETHYSTS"] - amethysts_position
 
-                    price_deviation_percentage = best_bid / acceptable_price - 1
-                    if price_deviation_percentage < -acceptable_bid_deviation:
+                    if price_deviation_percentage_bid < -acceptable_bid_deviation:
                         # work out what the bid price should be to make the price deviation 0.05%
                         acceptable_bid = round(
                             acceptable_price - (acceptable_price * (acceptable_bid_deviation - 0.00005)))
                         orders.append(Order(product, acceptable_bid, bid_size))
 
-                    price_deviation_percentage = best_ask / acceptable_price - 1
-                    if price_deviation_percentage > acceptable_ask_deviation:
+                    if price_deviation_percentage_ask > acceptable_ask_deviation:
                         # work out what the ask price should be to make the price deviation 0.05%
                         acceptable_ask = round(
                             acceptable_price + (acceptable_price * (acceptable_ask_deviation - 0.00005)))
@@ -303,33 +301,35 @@ class Trader:
                         ask_size = base_order_size * 2
                         bid_size = self.LIMITS["STARFRUIT"] - starfruit_position
 
-                    price_deviation_percentage = best_bid / acceptable_price - 1
-                    if price_deviation_percentage < -acceptable_bid_deviation:
+                    price_deviation_percentage_bid = best_bid / acceptable_price - 1
+                    if price_deviation_percentage_bid < -acceptable_bid_deviation:
                         # work out what the bid price should be to make the price deviation 0.05%
                         acceptable_bid = round(
                             acceptable_price - (acceptable_price * (acceptable_bid_deviation - 0.0001)))
                         orders.append(Order(product, acceptable_bid, bid_size))
 
-                    price_deviation_percentage = best_ask / acceptable_price - 1
-                    if price_deviation_percentage > acceptable_ask_deviation:
+                    price_deviation_percentage_ask = best_ask / acceptable_price - 1
+                    if price_deviation_percentage_ask > acceptable_ask_deviation:
                         # work out what the ask price should be to make the price deviation 0.05%
                         acceptable_ask = round(
                             acceptable_price + (acceptable_price * (acceptable_ask_deviation - 0.0001)))
                         orders.append(Order(product, acceptable_ask, -ask_size))
+
+            else:
+                # well this should just never happen
+                price_deviation_percentage_bid = 0
+                price_deviation_percentage_ask = 0
+                continue
 
             # what ever product it was, we want to append the orders to the result
             result[product] = orders
 
             # let's use traderData as a historical store of the book, so we can calculate some
             # indicators
-            market_trades = state.market_trades.get(self.product_str, [])
-
-            if market_trades:
-                for trade in market_trades:
-                    state.traderData = (
-                            state.traderData
-                            + f"{str(trade.symbol)},{trade.price},{trade.quantity},{trade.timestamp}\n"
-                    )
+            state.traderData = (
+                    state.traderData
+                    + f"{str(product)},{state.timestamp},{price_deviation_percentage_bid},{price_deviation_percentage_ask}\n"
+            )
 
         # Sample conversion request. Check more details below.
 
