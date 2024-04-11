@@ -179,8 +179,6 @@ class Trader:
                 if acceptable_price == "No Fair Value":
                     continue
                 base_order_size = 5  # This is your base order size, adjust as necessary
-                # what is the current spread?
-                tick_size = 1
 
                 # if the book is quoting a price that is too high on both sides,
                 # we will try to sell all of our position
@@ -248,8 +246,6 @@ class Trader:
                 if acceptable_price == "No Fair Value":
                     continue
                 base_order_size = 5  # This is your base order size, adjust as necessary
-                # what is the current spread?
-                tick_size = 1
 
                 # if the book is quoting a price that is too high on both sides, 
                 # we will try to sell all of our position
